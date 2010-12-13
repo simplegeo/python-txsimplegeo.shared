@@ -30,13 +30,23 @@ tests_require = ['mock', 'setuptools_trial']
 # generate code coverage results, but the following does:
 # rm -rf ./.coverage* htmlcov ; coverage run --branch  --include=txsimplegeo/* setup.py trial ; coverage html
 
+data_fnames=[ 'COPYING.SPL.txt', 'COPYING.GPL', 'COPYING.TGPPL.html', 'README.rst' ]
+
+# In case we are building for a .deb with stdeb's sdist_dsc command, we put the
+# docs in "share/doc/python-$PKG".
+doc_loc = "share/doc/" + PKG
+data_files = [(doc_loc, data_fnames)]
+
 setup(name=PKG,
       version=verstr,
-      description="Library for interfacing with SimpleGeo's API",
+      description="Twisted library for interfacing with SimpleGeo's API",
+      long_description=open('README.rst').read(),
       author="Zooko Wilcox-O'Hearn",
       author_email="zooko@simplegeo.com",
       url="http://github.com/simplegeo/python-txsimplegeo.shared",
       packages = find_packages(),
+      include_package_data=True,
+      data_files=data_files,
       license = "MIT License",
       install_requires=['pyutil >= 1.7.9'],
       keywords="simplegeo",

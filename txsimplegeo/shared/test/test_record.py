@@ -1,5 +1,5 @@
 import unittest
-from simplegeo.shared import Feature, deep_swap
+from txsimplegeo.shared import Feature, deep_swap
 from decimal import Decimal as D
 
 class FeatureTest(unittest.TestCase):
