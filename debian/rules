@@ -8,5 +8,5 @@ include /usr/share/cdbs/1/class/python-distutils.mk
 
 build/python-txsimplegeo.shared::
 	pyflakes txsimplegeo
-	python-coverage run --branch --include='txsimplegeo/*' /usr/bin/trial txsimplegeo.shared.test
-	python-coverage html -d $(ARTIFACTS)/htmlcov
+	PYTHONPATH= python-coverage run --branch --include='txsimplegeo/*' /usr/bin/trial txsimplegeo.shared.test
+	PYTHONPATH= python-coverage html -d $(ARTIFACTS)/htmlcov
