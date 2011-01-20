@@ -18,7 +18,7 @@ else:
         print "unable to find version in %s" % (VERSIONFILE,)
         raise RuntimeError("if %s.py exists, it must be well-formed" % (VERSIONFILE,))
 
-setup_requires = []
+setup_requires = ['setuptools_trial']
 tests_require = ['mock', 'setuptools_trial']
 
 # trialcoverage is an optional way to get code-coverage

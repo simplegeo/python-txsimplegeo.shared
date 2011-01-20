@@ -1,0 +1,17 @@
+Source: python-txsimplegeo.shared
+Section: python
+Priority: optional
+Maintainer: Zooko Ofsimplegeo <zooko@simplegeo.com>
+Standards-Version: 3.8.4
+XS-Python-Version: all
+Build-Depends: debhelper (>= 4.1.13), cdbs (>= 0.4.49), python, python-setuptools, python-support, pyflakes, python-coverage (>= 2.85), python-mock, python-twisted, python-pyutil (>= 1.7.9), python-setuptools_trial (>= 1.5.10)
+Homepage: https://github.com/simplegeo/txoauth
+
+Package: python-txsimplegeo.shared
+Architecture: all
+XB-Python-Version: ${python:Versions}
+Depends: ${python:Depends}, python-twisted
+Provides: ${python:Provides}
+Suggests:
+Description: provides OAuth 2.0 support for Twisted
+ * good unit test coverage
