@@ -1,10 +1,12 @@
-import unittest
+from twisted.trial import unittest
+from twisted.internet import defer
+from twisted.web.client import Response, ResponseDone
+from twisted.web.http import PotentialDataLoss
+
 from pyutil import jsonutil as json
-from simplegeo.shared import Client, APIError, DecodeError, Feature
+from txsimplegeo.shared import BodyCollector, Client, DecodeError, Feature, StringProducer, get_body
 
 from decimal import Decimal as D
-
-import mock
 
 MY_OAUTH_KEY = 'MY_OAUTH_KEY'
 MY_OAUTH_SECRET = 'MY_SECRET_KEY'
@@ -13,6 +15,126 @@ TESTING_LAYER = 'TESTING_LAYER'
 API_VERSION = '1.0'
 API_HOST = 'api.simplegeo.com'
 API_PORT = 80
+
+class DecodeErrorTest(unittest.TestCase):
+    def test_repr(self):
+        body = 'this is not json'
+        try:
+            json.loads('this is not json')
+        except ValueError, le:
+            e = DecodeError(body, le)
+        else:
+            self.fail("We were supposed to get an exception from json.loads().")
+
+        self.failUnless("Could not decode JSON" in e.msg, repr(e.msg))
+        self.failUnless('JSONDecodeError' in repr(e), repr(e))
+
+class FakeResponse(Response):
+    def __init__(self, respchunks, headers, code):
+        self.respchunks = respchunks
+        self.headers = headers
+        self.code = code
+
+    def deliverBody(self, consumer):
+        consumer.connectionLost(ResponseDone())
+
+class FakeSuccessResponse(FakeResponse):
+    def __init__(self, respchunks, headers):
+        FakeResponse.__init__(self, respchunks, headers, code=200)
+
+    def deliverBody(self, consumer):
+        for respchunk in self.respchunks:
+            consumer.dataReceived(respchunk)
+        consumer.connectionLost(ResponseDone())
+
+class FakePotentialDataLossResponse(FakeResponse):
+    def deliverBody(self, consumer):
+        for respchunk in self.respchunks:
+            consumer.dataReceived(respchunk)
+        consumer.connectionLost(PotentialDataLoss())
+
+class SomeException(Exception):
+    pass
+
+class FakeExceptionResponse(FakeResponse):
+    def deliverBody(self, consumer):
+        for respchunk in self.respchunks:
+            consumer.dataReceived(respchunk)
+        consumer.connectionLost(PotentialDataLoss())
+
+class FakeConsumer(object):
+    def write(self, body):
+        self.body = body
+
+class MockAgent(object):
+    def __init__(self, fakeresp):
+        self.fakeresp = fakeresp
+
+    def request(self, method, endpoint, bodyProducer):
+        self.method = method
+        self.endpoint = endpoint
+        self.bodyProducer = bodyProducer
+        return defer.succeed(self.fakeresp)
+
+class StringProducerTest(unittest.TestCase):
+    def test_string_producer(self):
+        sp = StringProducer('abc')
+
+        sp.pauseProducing()
+
+        fc = FakeConsumer()
+        sp.startProducing(fc)
+
+        self.failUnlessEqual(fc.body, 'abc')
+
+        sp.stopProducing()
+
+class BodyCollectorTest(unittest.TestCase):
+    def test_body_collector_collects_body(self):
+        bc = BodyCollector()
+        d = bc.start()
+        bc.dataReceived('a')
+        bc.dataReceived('b')
+        bc.connectionLost(ResponseDone())
+        def _check(res):
+            self.failUnless(res is bc, (res, bc))
+            self.failUnless(isinstance(res.reason, ResponseDone), (res.reason, type(res.reason)))
+            self.failUnless(res.bytes == 'ab', res.bytes)
+        d.addCallback(_check)
+        return d
+
+    def test_body_collector_errs_on_PotentialDataLoss(self):
+        bc = BodyCollector()
+        d = bc.start()
+        bc.dataReceived('a')
+        bc.dataReceived('b')
+        bc.connectionLost(PotentialDataLoss())
+
+        d1 = self.failUnlessFailure(d, PotentialDataLoss)
+        return d1
+
+    def test_get_body_gets_body(self):
+        fakeresp = FakeSuccessResponse(['a', 'b'], {})
+
+        d = get_body(fakeresp)
+        def _check(res):
+            self.failUnlessEqual(res, 'ab')
+        d.addCallback(_check)
+        return d
+
+    def test_get_body_errs_on_PDL(self):
+        fakeresp = FakePotentialDataLossResponse(['a', 'b'], {}, 200)
+
+        d = get_body(fakeresp)
+        d2 = self.failUnlessFailure(d, PotentialDataLoss)
+        return d2
+
+    def test_get_body_errs_on_exception(self):
+        fakeresp = FakeExceptionResponse(['a', 'b'], {}, 200)
+
+        d = get_body(fakeresp)
+        d2 = self.failUnlessFailure(d, Exception)
+        return d2
 
 class ClientTest(unittest.TestCase):
     def setUp(self):
@@ -27,62 +149,66 @@ class ClientTest(unittest.TestCase):
         self.assertRaises(Exception, self.client._endpoint, 'feature')
 
     def test_get_point_feature(self):
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '200', 'content-type': 'application/json', 'thingie': "just to see if you're listening"}, EXAMPLE_POINT_BODY)
-        self.client.http = mockhttp
+        mockagent = MockAgent(FakeSuccessResponse([EXAMPLE_POINT_BODY], {'status': '200', 'content-type': 'application/json', 'thingie': "just to see if you're listening"}))
+        self.client.agent = mockagent
 
-        res = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
-        self.assertEqual(mockhttp.method_calls[0][0], 'request')
-        self.assertEqual(mockhttp.method_calls[0][1][0], 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
-        self.assertEqual(mockhttp.method_calls[0][1][1], 'GET')
-        # the code under test is required to have json-decoded this before handing it back
-        self.failUnless(isinstance(res, Feature), (repr(res), type(res)))
+        d = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
+        def check_res(res):
+            self.assertEqual(mockagent.method, 'GET')
+            self.assertEqual(mockagent.endpoint, 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
+            # the code under test is required to have json-decoded this before handing it back
+            self.failUnless(isinstance(res, Feature), (repr(res), type(res)))
+            self.failUnlessEqual(res._http_response.headers, {'status': '200', 'content-type': 'application/json', 'thingie': "just to see if you're listening"})
 
-        self.failUnless(self.client.get_most_recent_http_headers(), {'status': '200', 'content-type': 'application/json', 'thingie': "just to see if you're listening"})
+        d.addCallback(check_res)
+        return d
 
     def test_get_polygon_feature(self):
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '200', 'content-type': 'application/json', }, EXAMPLE_BODY)
-        self.client.http = mockhttp
+        mockagent = MockAgent(FakeSuccessResponse([EXAMPLE_BODY], {'status': '200', 'content-type': 'application/json'}))
+        self.client.agent = mockagent
 
-        res = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
-        self.assertEqual(mockhttp.method_calls[0][0], 'request')
-        self.assertEqual(mockhttp.method_calls[0][1][0], 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
+        d = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
+        def check_res(res):
+            self.assertEqual(mockagent.method, 'GET')
+            self.assertEqual(mockagent.endpoint, 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
+            # the code under test is required to have json-decoded this before handing it back
+            self.failUnless(isinstance(res, Feature), (repr(res), type(res)))
 
-        self.assertEqual(mockhttp.method_calls[0][1][1], 'GET')
-        # the code under test is required to have json-decoded this before handing it back
-        self.failUnless(isinstance(res, Feature), (repr(res), type(res)))
-
+        d.addCallback(check_res)
+        return d
 
     def test_type_check_request(self):
         self.failUnlessRaises(TypeError, self.client._request, 'whatever', 'POST', {'bogus': "non string"})
 
     def test_get_feature_bad_json(self):
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '200', 'content-type': 'application/json', }, EXAMPLE_BODY + 'some crap')
-        self.client.http = mockhttp
+        mockagent = MockAgent(FakeSuccessResponse([EXAMPLE_BODY, 'some crap'], {'status': '200', 'content-type': 'application/json'}))
+        self.client.agent = mockagent
 
-        try:
-            self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
-        except DecodeError, e:
-            self.failUnlessEqual(e.code,None,repr(e.code))
-            self.failUnless("Could not decode JSON" in e.msg, repr(e.msg))
-            erepr = repr(e)
-            self.failUnless('JSONDecodeError' in erepr, erepr)
+        d = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
+        self.failUnlessFailure(d, DecodeError)
+        def after_error(f):
+            self.assertEqual(mockagent.endpoint, 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
+            self.assertEqual(mockagent.method, 'GET')
 
-        self.assertEqual(mockhttp.method_calls[0][0], 'request')
-        self.assertEqual(mockhttp.method_calls[0][1][0], 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
-        self.assertEqual(mockhttp.method_calls[0][1][1], 'GET')
+        d.addCallback(after_error)
+
+        return d
 
     def test_dont_json_decode_results(self):
-        """ _request() is required to return the exact string that the HTTP
-        server sent to it -- no transforming it, such as by json-decoding. """
+        """ _request() is required to return a deferred that fires
+        with a Response that has a deliverBody that delivers the exact
+        string that the HTTP server sent to it -- no transforming it,
+        such as by json-decoding. """
 
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '200', 'content-type': 'application/json', }, '{ "Hello": "I am a string. \xe2\x9d\xa4" }'.decode('utf-8'))
-        self.client.http = mockhttp
-        res = self.client._request("http://thing", 'POST')[1]
-        self.failUnlessEqual(res, '{ "Hello": "I am a string. \xe2\x9d\xa4" }'.decode('utf-8'))
+        mockagent = MockAgent(FakeSuccessResponse(['{ "Hello": "I am a string. \xe2\x9d\xa4" }'.decode('utf-8')], {'status': '200', 'content-type': 'application/json'}))
+        self.client.agent = mockagent
+
+        d = self.client._request("http://thing", 'POST')
+        d.addCallback(get_body)
+        def _with_body(body):
+            self.failUnlessEqual(body, '{ "Hello": "I am a string. \xe2\x9d\xa4" }'.decode('utf-8'))
+        d.addCallback(_with_body)
+        return d
 
     def test_dont_Recordify_results(self):
         """ _request() is required to return the exact string that the HTTP
@@ -91,33 +217,29 @@ class ClientTest(unittest.TestCase):
 
         EXAMPLE_RECORD_JSONSTR=json.dumps({ 'geometry' : { 'type' : 'Point', 'coordinates' : [D('10.0'), D('11.0')] }, 'id' : 'my_id', 'type' : 'Feature', 'properties' : { 'key' : 'value'  , 'type' : 'object' } })
 
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '200', 'content-type': 'application/json', }, EXAMPLE_RECORD_JSONSTR)
-        self.client.http = mockhttp
-        res = self.client._request("http://thing", 'POST')[1]
-        self.failUnlessEqual(res, EXAMPLE_RECORD_JSONSTR)
+        mockagent = MockAgent(FakeSuccessResponse([EXAMPLE_RECORD_JSONSTR], {'status': '200', 'content-type': 'application/json'}))
+        self.client.agent = mockagent
+
+        d = self.client._request("http://thing", 'POST')
+        d.addCallback(get_body)
+        def check(res):
+            self.failUnlessEqual(res, EXAMPLE_RECORD_JSONSTR)
+        d.addCallback(check)
+        return d
 
     def test_get_feature_error(self):
-        mockhttp = mock.Mock()
-        mockhttp.request.return_value = ({'status': '500', 'content-type': 'application/json', }, '{"message": "help my web server is confuzzled"}')
-        self.client.http = mockhttp
+        fakeresp = FakeResponse('{"message": "help my web server is confuzzled"}', {'status': '500', 'content-type': 'application/json'}, code=500)
+        mockagent = MockAgent(fakeresp)
+        self.client.agent = mockagent
 
-        try:
-            self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
-        except APIError, e:
-            self.failUnlessEqual(e.code, 500, repr(e.code))
-            self.failUnlessEqual(e.msg, '{"message": "help my web server is confuzzled"}', (type(e.msg), repr(e.msg)))
-
-        self.assertEqual(mockhttp.method_calls[0][0], 'request')
-        self.assertEqual(mockhttp.method_calls[0][1][0], 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
-        self.assertEqual(mockhttp.method_calls[0][1][1], 'GET')
-
-    def test_APIError(self):
-        e = APIError(500, 'whee', {'status': "500"})
-        self.failUnlessEqual(e.code, 500)
-        self.failUnlessEqual(e.msg, 'whee')
-        repr(e)
-        str(e)
+        d = self.client.get_feature("SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970")
+        self.failUnlessFailure(d, FakeResponse)
+        def after_error(f):
+            self.failUnlessEqual(f.code, 500)
+            self.assertEqual(mockagent.endpoint, 'http://api.simplegeo.com:80/%s/features/%s.json' % (API_VERSION, "SG_4bgzicKFmP89tQFGLGZYy0_34.714646_-86.584970"))
+            self.assertEqual(mockagent.method, 'GET')
+        d.addCallback(after_error)
+        return d
 
 EXAMPLE_POINT_BODY="""
 {"geometry":{"type":"Point","coordinates":[-105.048054,40.005274]},"type":"Feature","id":"SG_6sRJczWZHdzNj4qSeRzpzz_40.005274_-105.048054@1291669259","properties":{"province":"CO","city":"Erie","name":"CMD Colorado Inc","tags":["sandwich"],"country":"US","phone":"+1 303 664 9448","address":"305 Baron Ct","owner":"simplegeo","classifiers":[{"category":"Restaurants","type":"Food & Drink","subcategory":""}],"postcode":"80516"}}
