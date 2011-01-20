@@ -25,8 +25,8 @@ else:
         averstr = ''
     verstr = '.'.join([mverstr, averstr])
 
-setup_requires = ['setuptools_trial']
-tests_require = ['mock', 'setuptools_trial']
+setup_requires = []
+tests_require = ['mock']
 
 # trialcoverage is an optional way to get code-coverage
 # results. Uncomment the following and run "python setup.py trial
