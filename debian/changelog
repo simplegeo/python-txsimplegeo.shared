@@ -1,3 +1,29 @@
+python-txsimplegeo.shared (0.9.0) lucid; urgency=low
+
+  [ Zooko Ofsimplegeo ]
+  * an initial version of txsimplegeo.shared which passes all tests but
+    doesn't yet have tests of using oauth or any real-world manual
+    testing
+  * add debian/rules (copied from the txoauth project)
+  * update metadata including build-time dependencies
+  * version file formatted so hudson can update the build-number stamp
+    without conflicting with the manually-controlled version-number
+    stamp
+  * parse the new split version number (manual version number and
+    automatic build number)
+  * see if python-setuptools-trial is spelled this way
+  * stop trying to use setuptools_trial, just use trial
+  * how to run trial under coverage
+  * perhaps the version of coverage available on the hudson slave
+    doesn't support --branch
+  * ah, we need the python-twisted-bin debian package to get trial
+  * hm... how about if I spell "run trial under coverage" this way...
+  * I think python-coverage gets confused by the PYTHONPATH somehow...
+
+  [ SimpleGeo Nerds ]
+
+ -- SimpleGeo Nerds <nerds@simplegeo.com>  Thu, 20 Jan 2011 17:53:01 +0000
+
 python-txsimplegeo.shared (0.9) lucid; urgency=low
 
   [ Zooko Ofsimplegeo ]
